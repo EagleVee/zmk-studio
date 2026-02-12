@@ -243,8 +243,8 @@ export const BehaviorBindingPicker = ({
   const handleBehaviorSelect = useCallback(
     (id: number) => {
       setBehaviorId(id);
-      setParam1(0);
-      setParam2(0);
+      // setParam1(0);
+      // setParam2(0);
     },
     []
   );
