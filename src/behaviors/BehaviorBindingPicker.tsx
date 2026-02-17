@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -30,7 +30,7 @@ function validateBinding(
   metadata: BehaviorBindingParametersSet[],
   layerIds: number[],
   param1?: number,
-  param2?: number
+  param2?: number,
 ): boolean {
   if (
     (param1 === undefined || param1 === 0) &&
@@ -40,7 +40,7 @@ function validateBinding(
   }
 
   let matchingSet = metadata.find((s) =>
-    validateValue(layerIds, param1, s.param1)
+    validateValue(layerIds, param1, s.param1),
   );
 
   if (!matchingSet) {
@@ -87,15 +87,17 @@ const InlineParamPicker = ({
           {values.map((v) => {
             const name = v.name || "";
             const colSpan = name.length > 7 ? 3 : name.length > 3 ? 2 : 1;
-            const spanClass = colSpan === 3 ? "col-span-3" : colSpan === 2 ? "col-span-2" : "";
+            const spanClass =
+              colSpan === 3 ? "col-span-3" : colSpan === 2 ? "col-span-2" : "";
             return (
               <button
                 key={v.constant}
                 onClick={() => onValueChanged(v.constant)}
-                className={`${spanClass} h-[3.2rem] rounded text-sm font-medium cursor-pointer transition-colors flex items-center justify-center ${value === v.constant
-                  ? "bg-primary text-primary-content"
-                  : "bg-base-100 text-base-content hover:bg-base-300"
-                  }`}
+                className={`${spanClass} h-[3.2rem] rounded text-sm font-medium cursor-pointer transition-colors flex items-center justify-center ${
+                  value === v.constant
+                    ? "bg-primary text-primary-content"
+                    : "bg-base-100 text-base-content hover:bg-base-300"
+                }`}
               >
                 <span className="truncate px-1">{name}</span>
               </button>
@@ -117,10 +119,11 @@ const InlineParamPicker = ({
             <button
               key={id}
               onClick={() => onValueChanged(id)}
-              className={`px-4 py-1.5 rounded text-sm font-medium cursor-pointer transition-colors ${value === id
-                ? "bg-primary text-primary-content"
-                : "bg-base-100 text-base-content hover:bg-base-300"
-                }`}
+              className={`px-4 py-1.5 rounded text-sm font-medium cursor-pointer transition-colors ${
+                value === id
+                  ? "bg-primary text-primary-content"
+                  : "bg-base-100 text-base-content hover:bg-base-300"
+              }`}
             >
               {name}
             </button>
@@ -138,16 +141,19 @@ const InlineParamPicker = ({
     }
     return (
       <div className="flex flex-col gap-1">
-        <div className="text-sm text-base-content/60 mb-1">{values[0].name}</div>
+        <div className="text-sm text-base-content/60 mb-1">
+          {values[0].name}
+        </div>
         <div className="flex gap-1.5 flex-wrap">
           {buttons.map((n) => (
             <button
               key={n}
               onClick={() => onValueChanged(n)}
-              className={`w-10 h-10 rounded text-sm font-medium cursor-pointer transition-colors flex items-center justify-center ${value === n
-                ? "bg-primary text-primary-content"
-                : "bg-base-100 text-base-content hover:bg-base-300"
-                }`}
+              className={`w-10 h-10 rounded text-sm font-medium cursor-pointer transition-colors flex items-center justify-center ${
+                value === n
+                  ? "bg-primary text-primary-content"
+                  : "bg-base-100 text-base-content hover:bg-base-300"
+              }`}
             >
               {n}
             </button>
@@ -171,9 +177,14 @@ export const BehaviorBindingPicker = ({
   const [param1, setParam1] = useState<number | undefined>(binding.param1);
   const [param2, setParam2] = useState<number | undefined>(binding.param2);
 
+  // Per-behavior (param1, param2) for display when switching behavior; binding only updates on actual pick
+  const lastParamsByBehaviorRef = useRef<
+    Record<number, { param1: number; param2: number }>
+  >({});
+
   const categorized = useMemo(
     () => categorizeBehaviors(behaviors),
-    [behaviors]
+    [behaviors],
   );
 
   const currentCategory = useMemo(() => {
@@ -193,76 +204,113 @@ export const BehaviorBindingPicker = ({
 
   const metadata = useMemo(
     () => behaviors.find((b) => b.id == behaviorId)?.metadata,
-    [behaviorId, behaviors]
+    [behaviorId, behaviors],
   );
 
   const selectedBehavior = useMemo(
     () => behaviors.find((b) => b.id == behaviorId),
-    [behaviorId, behaviors]
+    [behaviorId, behaviors],
   );
 
-  useEffect(() => {
-    if (
-      binding.behaviorId === behaviorId &&
-      binding.param1 === param1 &&
-      binding.param2 === param2
-    ) {
-      return;
-    }
-
-    if (!metadata) {
-      console.error(
-        "Can't find metadata for the selected behaviorId",
-        behaviorId
-      );
-      return;
-    }
-
-    if (
-      validateBinding(
-        metadata,
-        layers.map(({ id }) => id),
-        param1,
-        param2
-      )
-    ) {
-      onBindingChanged({
-        behaviorId,
-        param1: param1 || 0,
-        param2: param2 || 0,
-      });
-    }
-  }, [behaviorId, param1, param2]);
-
+  // Sync display from parent when binding changes (e.g. user selected another key)
   useEffect(() => {
     setBehaviorId(binding.behaviorId);
     setParam1(binding.param1);
     setParam2(binding.param2);
+    lastParamsByBehaviorRef.current[binding.behaviorId] = {
+      param1: binding.param1,
+      param2: binding.param2,
+    };
   }, [binding]);
 
-  const handleBehaviorSelect = useCallback(
-    (id: number) => {
-      setBehaviorId(id);
-      // setParam1(0);
-      // setParam2(0);
+  const layerIds = useMemo(() => layers.map((l) => l.id), [layers]);
+
+  const commitBinding = useCallback(
+    (bId: number, p1: number, p2: number) => {
+      const meta = behaviors.find((b) => b.id === bId)?.metadata;
+      if (
+        !meta ||
+        !validateBinding(meta, layerIds, p1, p2)
+      ) {
+        return;
+      }
+      onBindingChanged({
+        behaviorId: bId,
+        param1: p1,
+        param2: p2,
+      });
     },
-    []
+    [behaviors, layerIds, onBindingChanged],
+  );
+
+  const handleBehaviorSelect = useCallback(
+    (id: number, fromCategoryClick = false) => {
+      setBehaviorId(id);
+      const saved = lastParamsByBehaviorRef.current[id];
+      const p1 = saved?.param1 ?? 0;
+      const p2 = saved?.param2 ?? 0;
+      setParam1(p1);
+      setParam2(p2);
+      if (fromCategoryClick) {
+        return;
+      }
+      const meta = behaviors.find((b) => b.id === id)?.metadata;
+      const hasParams =
+        meta?.some(
+          (s) => (s.param1?.length ?? 0) > 0 || (s.param2?.length ?? 0) > 0,
+        ) ?? false;
+      if (!hasParams) {
+        commitBinding(id, 0, 0);
+      }
+    },
+    [behaviors, commitBinding],
+  );
+
+  const handleParam1Change = useCallback(
+    (value?: number) => {
+      const p1 = value ?? 0;
+      setParam1(value);
+      lastParamsByBehaviorRef.current[behaviorId] = {
+        ...lastParamsByBehaviorRef.current[behaviorId],
+        param1: p1,
+        param2: param2 ?? 0,
+      };
+      commitBinding(behaviorId, p1, param2 ?? 0);
+    },
+    [behaviorId, param2, commitBinding],
+  );
+
+  const handleParam2Change = useCallback(
+    (value?: number) => {
+      const p2 = value ?? 0;
+      setParam2(value);
+      lastParamsByBehaviorRef.current[behaviorId] = {
+        ...lastParamsByBehaviorRef.current[behaviorId],
+        param1: param1 ?? 0,
+        param2: p2,
+      };
+      commitBinding(behaviorId, param1 ?? 0, p2);
+    },
+    [behaviorId, param1, commitBinding],
   );
 
   const handleCategorySelect = useCallback(
     (catId: string) => {
       setSelectedCategoryId(catId);
       const catBehaviors = categorized[catId] || [];
-      if (catBehaviors.length > 0 && !catBehaviors.some((b) => b.id === behaviorId)) {
-        handleBehaviorSelect(catBehaviors[0].id);
+      if (
+        catBehaviors.length > 0 &&
+        !catBehaviors.some((b) => b.id === behaviorId)
+      ) {
+        handleBehaviorSelect(catBehaviors[0].id, true);
       }
     },
-    [categorized, behaviorId, handleBehaviorSelect]
+    [categorized, behaviorId, handleBehaviorSelect],
   );
 
   const param1Values = useMemo(
     () => metadata?.flatMap((m) => m.param1) || [],
-    [metadata]
+    [metadata],
   );
 
   const param2Values = useMemo(() => {
@@ -271,8 +319,8 @@ export const BehaviorBindingPicker = ({
       validateValue(
         layers.map((l) => l.id),
         param1,
-        s.param1
-      )
+        s.param1,
+      ),
     );
     return set?.param2 || [];
   }, [metadata, param1, layers]);
@@ -281,9 +329,7 @@ export const BehaviorBindingPicker = ({
   const param2IsHid = hasHidUsage(param2Values);
 
   const hidUsagePages = useMemo(() => {
-    const hidParam = [...param1Values, ...param2Values].find(
-      (v) => v.hidUsage
-    );
+    const hidParam = [...param1Values, ...param2Values].find((v) => v.hidUsage);
     if (!hidParam?.hidUsage) return null;
     return [
       { id: 7, min: 4, max: hidParam.hidUsage.keyboardMax },
@@ -292,8 +338,9 @@ export const BehaviorBindingPicker = ({
   }, [param1Values, param2Values]);
 
   const availableCategories = useMemo(
-    () => BEHAVIOR_CATEGORIES.filter((c) => (categorized[c.id]?.length || 0) > 0),
-    [categorized]
+    () =>
+      BEHAVIOR_CATEGORIES.filter((c) => (categorized[c.id]?.length || 0) > 0),
+    [categorized],
   );
 
   const categoryBehaviors = categorized[selectedCategoryId] || [];
@@ -316,10 +363,11 @@ export const BehaviorBindingPicker = ({
           <button
             key={b.id}
             onClick={() => handleBehaviorSelect(b.id)}
-            className={`px-3 py-1.5 rounded text-sm text-left cursor-pointer transition-colors whitespace-nowrap ${behaviorId === b.id
-              ? "bg-primary text-primary-content"
-              : "text-base-content hover:bg-base-300"
-              }`}
+            className={`px-3 py-1.5 rounded text-sm text-left cursor-pointer transition-colors whitespace-nowrap ${
+              behaviorId === b.id
+                ? "bg-primary text-primary-content"
+                : "text-base-content hover:bg-base-300"
+            }`}
           >
             {b.displayName}
           </button>
@@ -332,38 +380,40 @@ export const BehaviorBindingPicker = ({
             param1={param1}
             param2={param2}
             usagePages={hidUsagePages}
-            onParam1Changed={setParam1}
-            onParam2Changed={setParam2}
+            onParam1Changed={handleParam1Change}
+            onParam2Changed={handleParam2Change}
           />
         )}
 
-        {(param1IsHid !== param2IsHid) && (param1IsHid || param2IsHid) && hidUsagePages && (
-          <>
-            {hasLayerId(param1Values) && (
-              <div className="mb-2">
-                <InlineParamPicker
-                  values={param1Values}
-                  value={param1}
-                  layers={layers}
-                  onValueChanged={setParam1}
+        {param1IsHid !== param2IsHid &&
+          (param1IsHid || param2IsHid) &&
+          hidUsagePages && (
+            <>
+              {hasLayerId(param1Values) && (
+                <div className="mb-2">
+                  <InlineParamPicker
+                    values={param1Values}
+                    value={param1}
+                    layers={layers}
+                  onValueChanged={handleParam1Change}
                   label={t("binding.layer")}
-                />
-              </div>
-            )}
-            <HidUsageGrid
-              value={param1IsHid ? param1 : param2}
-              usagePages={hidUsagePages}
-              onValueChanged={param1IsHid ? setParam1 : setParam2}
-            />
-          </>
-        )}
+                  />
+                </div>
+              )}
+              <HidUsageGrid
+                value={param1IsHid ? param1 : param2}
+                usagePages={hidUsagePages}
+                onValueChanged={param1IsHid ? handleParam1Change : handleParam2Change}
+              />
+            </>
+          )}
 
         {!param1IsHid && !param2IsHid && param1Values.length > 0 && (
           <InlineParamPicker
             values={param1Values}
             value={param1}
             layers={layers}
-            onValueChanged={setParam1}
+            onValueChanged={handleParam1Change}
             label={hasLayerId(param1Values) ? t("binding.layer") : undefined}
           />
         )}
@@ -374,7 +424,7 @@ export const BehaviorBindingPicker = ({
               values={param2Values}
               value={param2}
               layers={layers}
-              onValueChanged={setParam2}
+              onValueChanged={handleParam2Change}
               label={hasLayerId(param2Values) ? t("binding.layer") : undefined}
             />
           </div>
@@ -384,7 +434,8 @@ export const BehaviorBindingPicker = ({
           param2Values.length === 0 &&
           selectedBehavior && (
             <div className="flex items-center justify-center h-full text-base-content/40 text-sm">
-              {selectedBehavior.displayName} — {t("binding.noParametersRequired")}
+              {selectedBehavior.displayName} —{" "}
+              {t("binding.noParametersRequired")}
             </div>
           )}
       </div>
@@ -406,10 +457,11 @@ const CategoryButton = ({
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors text-left ${isActive
-        ? "bg-primary text-primary-content"
-        : "text-base-content hover:bg-base-300"
-        }`}
+      className={`flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors text-left ${
+        isActive
+          ? "bg-primary text-primary-content"
+          : "text-base-content hover:bg-base-300"
+      }`}
     >
       <Icon className="w-4 h-4 flex-shrink-0" />
       <span>{t(`behavior.category.${category.id}`)}</span>
@@ -451,7 +503,7 @@ const DualHidPicker = ({
         onParam2Changed(value);
       }
     },
-    [activeSlot, onParam1Changed, onParam2Changed]
+    [activeSlot, onParam1Changed, onParam2Changed],
   );
 
   return (
@@ -459,12 +511,15 @@ const DualHidPicker = ({
       <div className="flex gap-2 items-center">
         <button
           onClick={() => setActiveSlot(1)}
-          className={`flex-1 flex flex-col items-center gap-0.5 px-3 py-2 rounded cursor-pointer transition-colors ${activeSlot === 1
-            ? "ring-2 ring-primary bg-base-100"
-            : "bg-base-300 hover:bg-base-100"
-            }`}
+          className={`flex-1 flex flex-col items-center gap-0.5 px-3 py-2 rounded cursor-pointer transition-colors ${
+            activeSlot === 1
+              ? "ring-2 ring-primary bg-base-100"
+              : "bg-base-300 hover:bg-base-100"
+          }`}
         >
-          <span className="text-sm text-base-content/50">{t("binding.hold")}</span>
+          <span className="text-sm text-base-content/50">
+            {t("binding.hold")}
+          </span>
           <span className="text-base font-semibold text-base-content truncate max-w-full">
             {slot1Label}
           </span>
@@ -472,12 +527,15 @@ const DualHidPicker = ({
         <span className="text-base-content/30 text-lg">+</span>
         <button
           onClick={() => setActiveSlot(2)}
-          className={`flex-1 flex flex-col items-center gap-0.5 px-3 py-2.5 rounded cursor-pointer transition-colors ${activeSlot === 2
-            ? "ring-2 ring-primary bg-base-100"
-            : "bg-base-300 hover:bg-base-100"
-            }`}
+          className={`flex-1 flex flex-col items-center gap-0.5 px-3 py-2.5 rounded cursor-pointer transition-colors ${
+            activeSlot === 2
+              ? "ring-2 ring-primary bg-base-100"
+              : "bg-base-300 hover:bg-base-100"
+          }`}
         >
-          <span className="text-sm text-base-content/50">{t("binding.tap")}</span>
+          <span className="text-sm text-base-content/50">
+            {t("binding.tap")}
+          </span>
           <span className="text-base font-semibold text-base-content truncate max-w-full">
             {slot2Label}
           </span>
